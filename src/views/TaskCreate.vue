@@ -65,7 +65,8 @@ const progressPercentage = ref(0);
 const progressDetail = ref('准备提交...');
 // 新增：轮询计数器和最大尝试次数
 const pollCount = ref(0);
-const MAX_POLL_COUNT = 5
+// 修改：增加最大轮询次数至 60 次 (约 3 分钟)，防止正常网络波动导致过早停止
+const MAX_POLL_COUNT = 60;
 
 onMounted(async () => {
   const res = await getTemplates();
@@ -162,9 +163,10 @@ function startPolling(taskId: string) {
     // 检查是否超过最大轮询次数
     if (pollCount.value >= MAX_POLL_COUNT) {
       stopPolling();
-      ElMessage.warning('轮询次数已达上限，自动跳转至结果页查看最新状态。');
+      ElMessage.warning('处理时间较长，已自动停止轮询。正在跳转至结果页查看最新状态（数据可能尚未生成）。');
       isPolling.value = false;
-      // 修改：达到最大次数后自动跳转
+      
+      // 优化：达到最大次数后自动跳转
       setTimeout(() => {
         router.push(`/result/${taskId}`);
       }, 800);
@@ -187,7 +189,7 @@ function startPolling(taskId: string) {
         progressDetail.value = `进度：${current}/${total}`;
       }
 
-      // 修改：确保 status 是字符串比较 (后端返回的是字符串 'completed', 'failed' 等)
+      // 修改：确保 status 是字符串比较
       if (status === 'completed') {
         stopPolling();
         ElMessage.success('分析完成！正在跳转结果页...');
@@ -204,8 +206,6 @@ function startPolling(taskId: string) {
       }
     } catch (err) {
       console.error('轮询失败:', err);
-      // 非致命错误，继续轮询或根据策略停止
-      // 如果连续错误多次，也可以考虑停止，这里暂时保持原有逻辑
       pollTimer.value = window.setTimeout(poll, 3000);
     }
   };

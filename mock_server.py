@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import time
+import random
 
 app = FastAPI()
 
@@ -29,41 +30,17 @@ def get_templates():
 @app.post("/api/tasks")
 def create_task(data: dict):
     task_id = str(uuid.uuid4())
-    # 初始化任务状态为 pending，稍后在轮询中模拟变化
+    # 初始化任务状态为 pending
     mock_tasks[task_id] = {
         "status": "pending", 
         "job_description": data.get("job_description"), 
         "evaluation_criteria": data.get("evaluation_criteria"),
-        "created_at": time.time()
+        "created_at": time.time(),
+        "files": [] # 用于存储上传的文件名
     }
     
-    # 预生成结果和 dashboard 数据，确保字段完整
-    mock_results[task_id] = {
-        "task_id": task_id,
-        "status": "completed",
-        "total_candidates": 8,
-        "top_3": [
-            {"filename": "张三.docx", "profile": {"name": "张三", "relevant_years": 6, "education": {"degree": "硕士", "school": "清华大学"}, "skill_matrix": [{"Python": 5, "Java": 4}], "expected_salary": "30-40K/月"}, "evaluation": {"score": 92, "strength": "架构能力强", "risk": "跳槽频繁", "final_rank": 1}},
-            {"filename": "李四.docx", "profile": {"name": "李四", "relevant_years": 7, "education": {"degree": "本科", "school": "北大"}, "skill_matrix": [{"Python": 4, "Java": 5}], "expected_salary": "28-38K/月"}, "evaluation": {"score": 88, "strength": "项目经验丰富", "risk": "沟通需提升", "final_rank": 2}},
-            {"filename": "王五.docx", "profile": {"name": "王五", "relevant_years": 5, "education": {"degree": "本科", "school": "复旦大学"}, "skill_matrix": [{"Python": 4, "Java": 4}], "expected_salary": "25-35K/月"}, "evaluation": {"score": 85, "strength": "执行力强", "risk": "管理经验不足", "final_rank": 3}}
-        ],
-        "all_candidates": [
-            {"filename": f"候选人{i+1}.docx", "profile": {"name": f"候选人{i+1}", "relevant_years": 3+i, "education": {"degree": "本科", "school": "XX 大学"}, "skill_matrix": [{"Python": 3+i%3, "Java": 2+i%4}], "expected_salary": f"{20+i}K/月"}, "evaluation": {"score": 60+5*i, "strength": "技能扎实", "risk": "", "final_rank": i+1}} for i in range(8)
-        ],
-        "score_distribution": {"average": 78, "max_score": 92, "min_score": 60, "high_count": 2, "medium_count": 5, "low_count": 1},
-        "created_at": "2026-03-17T10:00:00Z",
-        "completed_at": "2026-03-17T10:01:00Z"
-    }
-    
-    mock_dashboard[task_id] = {
-        "score_distribution": {"average": 78, "max_score": 92, "min_score": 60, "high_count": 2, "medium_count": 5, "low_count": 1},
-        "skill_radar": [
-            {"name": "张三", "Python": 5, "Java": 4, "System Design": 5, "Communication": 4}, 
-            {"name": "李四", "Python": 4, "Java": 5, "System Design": 4, "Communication": 5}, 
-            {"name": "王五", "Python": 4, "Java": 4, "System Design": 3, "Communication": 4}
-        ],
-        "level_pie": {"专家": 2, "熟练": 4, "了解": 2}
-    }
+    # 【真实场景提示】：此处不应预生成结果，而应触发异步 Celery/Redis 任务
+    # 真实逻辑：await ai_service.analyze(task_id, data)
     
     return {"task_id": task_id}
 
@@ -76,14 +53,18 @@ def upload_resumes(task_id: str, files: list[UploadFile] = File(...)):
     if len(files) > 20:
         return JSONResponse(status_code=400, content={"message": "最多只能上传 20 份简历"})
     
-    # 校验格式：支持 .doc 和 .docx
+    # 校验格式
     allowed_extensions = ['.doc', '.docx']
     for f in files:
         if not any(f.filename.lower().endswith(ext) for ext in allowed_extensions):
             return JSONResponse(status_code=400, content={"message": f"仅支持 {', '.join(allowed_extensions)} 格式，当前文件：{f.filename}"})
     
-    # 模拟上传成功后进入处理流程
-    mock_tasks[task_id]["status"] = "processing"
+    # 记录上传的文件名，用于后续生成动态模拟数据
+    uploaded_filenames = [f.filename for f in files if f.filename]
+    mock_tasks[task_id]["files"] = uploaded_filenames
+    
+    # 【关键修改】模拟上传成功后直接进入 completed 状态
+    mock_tasks[task_id]["status"] = "completed"
     mock_tasks[task_id]["upload_count"] = len(files)
     
     return {"message": "上传成功", "count": len(files)}
@@ -93,10 +74,55 @@ def get_result(task_id: str):
     if task_id not in mock_tasks:
         return JSONResponse(status_code=404, content={"message": "任务不存在"})
     
-    # 如果任务未完成，返回空或提示
     if mock_tasks[task_id].get("status") != "completed":
         return {"task_id": task_id, "status": "processing", "message": "分析尚未完成"}
-        
+    
+    # 【真实场景提示】：此处应从数据库查询分析结果
+    # 真实逻辑：result = db.query(Result).filter_by(task_id=task_id).first()
+    
+    # 为了演示效果，根据上传的文件名动态生成部分数据，增加真实感
+    uploaded_files = mock_tasks[task_id].get("files", [])
+    candidate_count = len(uploaded_files) if uploaded_files else 8
+    
+    # 如果没有上传文件，使用默认数据；如果有，尝试映射文件名
+    names = [f.split('.')[0] for f in uploaded_files] if uploaded_files else ["张三", "李四", "王五", "赵六", "孙七", "周八", "吴九", "郑十"]
+    
+    all_candidates = []
+    for i, name in enumerate(names[:candidate_count]):
+        score = random.randint(60, 95)
+        all_candidates.append({
+            "filename": f"{name}.docx",
+            "profile": {
+                "name": name,
+                "relevant_years": random.randint(1, 10),
+                "education": {"degree": random.choice(["本科", "硕士", "博士"]), "school": f"{random.choice(['清华', '北大', '复旦', '交大'])}大学"},
+                "skill_matrix": [{"Python": random.randint(3, 5)}, {"Java": random.randint(3, 5)}],
+                "expected_salary": f"{random.randint(20, 50)}K/月"
+            },
+            "evaluation": {
+                "score": score,
+                "strength": "技能扎实" if score > 80 else "潜力股",
+                "risk": "无" if score > 85 else "经验稍浅",
+                "final_rank": i + 1
+            }
+        })
+    
+    # 排序
+    all_candidates.sort(key=lambda x: x["evaluation"]["score"], reverse=True)
+    for idx, c in enumerate(all_candidates):
+        c["evaluation"]["final_rank"] = idx + 1
+
+    mock_results[task_id] = {
+        "task_id": task_id,
+        "status": "completed",
+        "total_candidates": len(all_candidates),
+        "top_3": all_candidates[:3],
+        "all_candidates": all_candidates,
+        "score_distribution": {"average": 78, "max_score": 92, "min_score": 60, "high_count": 2, "medium_count": 5, "low_count": 1},
+        "created_at": "2026-03-17T10:00:00Z",
+        "completed_at": "2026-03-17T10:01:00Z"
+    }
+    
     return mock_results.get(task_id, {})
 
 @app.get("/api/tasks/{task_id}/dashboard")
@@ -106,6 +132,42 @@ def get_dashboard(task_id: str):
         
     if mock_tasks[task_id].get("status") != "completed":
         return {"task_id": task_id, "status": "processing", "message": "数据尚未生成"}
+
+    # 【真实场景提示】：此处应从数据统计服务获取
+    # 真实逻辑：stats = analytics_service.get_dashboard_stats(task_id)
+    
+    # 复用 result 中的数据生成图表数据
+    result = mock_results.get(task_id, {})
+    candidates = result.get("all_candidates", [])
+    
+    skill_radar = []
+    level_pie = {"专家": 0, "熟练": 0, "了解": 0}
+    
+    for c in candidates:
+        name = c["profile"]["name"]
+        score = c["evaluation"]["score"]
+        # 模拟雷达图数据
+        skill_radar.append({
+            "name": name,
+            "Python": random.randint(3, 5),
+            "Java": random.randint(3, 5),
+            "System Design": random.randint(3, 5),
+            "Communication": random.randint(3, 5)
+        })
+        
+        # 模拟饼图数据
+        if score >= 90:
+            level_pie["专家"] += 1
+        elif score >= 75:
+            level_pie["熟练"] += 1
+        else:
+            level_pie["了解"] += 1
+            
+    mock_dashboard[task_id] = {
+        "score_distribution": {"average": 78, "max_score": 92, "min_score": 60, "high_count": 2, "medium_count": 5, "low_count": 1},
+        "skill_radar": skill_radar,
+        "level_pie": {k: v for k, v in level_pie.items() if v > 0} # 移除数量为 0 的项
+    }
 
     return mock_dashboard.get(task_id, {})
 
@@ -117,15 +179,11 @@ def get_task_status(task_id: str):
     task = mock_tasks[task_id]
     status = task.get("status", "pending")
     
-    # 模拟状态流转逻辑，用于前端进度条展示
-    # 假设：pending -> processing (extracting -> evaluating -> ranking) -> completed
     progress_data = {"total": 100, "current": 0, "stage": "pending", "percentage": 0}
     
     if status == "pending":
         progress_data = {"total": 100, "current": 10, "stage": "extracting", "percentage": 10}
     elif status == "processing":
-        # 简单模拟：根据上传后的时间推移改变阶段（实际项目中应由后台真实任务驱动）
-        # 这里为了演示前端轮询效果，固定返回一个中间状态，或者可以根据 upload_count 存在与否判断
         if task.get("upload_count"):
              progress_data = {"total": 100, "current": 60, "stage": "evaluating", "percentage": 60}
         else:
@@ -140,7 +198,6 @@ def get_task_status(task_id: str):
         "created_at": task.get("created_at", "")
     }
 
-# 辅助接口：用于手动触发任务完成（可选，方便测试）
 @app.post("/api/tasks/{task_id}/complete")
 def complete_task(task_id: str):
     if task_id in mock_tasks:
